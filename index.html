@@ -3,110 +3,155 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GAS通信テスト</title>
+    <title>予約システム</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
-<body class="bg-slate-100 p-8">
-    <div class="max-w-md mx-auto bg-white p-6 rounded-2xl shadow-lg border border-slate-200">
-        <h1 class="text-xl font-bold mb-4 text-slate-800">GAS 通信テスト</h1>
-        <p class="text-sm text-slate-500 mb-6">
-            GAS のデプロイ URL を入力して、疎通確認ボタンを押してください。<br>
-            GitHub Pages から GAS へデータが届くか確認します。
-        </p>
-        
-        <div class="mb-4">
-            <label class="block text-xs font-bold text-slate-400 uppercase mb-1">GAS Web App URL</label>
-            <input id="gasUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" 
-                   class="w-full border border-slate-200 p-3 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none transition">
-        </div>
-
-        <button onclick="testConnection()" id="btn"
-                class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 active:scale-95 transition-all">
-            GAS へテスト送信
-        </button>
-
-        <!-- 結果表示エリア -->
-        <div id="result" class="mt-6 p-4 rounded-xl hidden text-sm leading-relaxed"></div>
+<body class="bg-slate-50 p-4">
+<div id="app" class="max-w-md mx-auto py-8">
+    <!-- ステータス表示（読み込み中） -->
+    <div v-if="loading" class="text-center py-20">
+        <div class="animate-spin inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
+        <p class="text-slate-500 font-medium">{{ status }}</p>
     </div>
 
-    <script>
-        /**
-         * GAS への通信テストを実行する関数
-         */
-        async function testConnection() {
-            const urlInput = document.getElementById('gasUrl');
-            const url = urlInput.value.trim();
-            const btn = document.getElementById('btn');
-            const resDiv = document.getElementById('result');
+    <!-- エラー表示 -->
+    <div v-else-if="error" class="bg-white p-8 rounded-3xl shadow-xl border border-red-100 text-center">
+        <div class="text-red-500 text-5xl mb-4">⚠️</div>
+        <h2 class="text-xl font-bold text-slate-800 mb-2">エラーが発生しました</h2>
+        <p class="text-sm text-slate-500 mb-6 leading-relaxed">{{ error }}</p>
+        <button @click="window.location.reload()" class="w-full bg-slate-800 text-white py-3 rounded-xl font-bold active:scale-95 transition">再試行</button>
+    </div>
 
-            if (!url) { 
-                alert("GAS のデプロイ URL を入力してください。"); 
-                return; 
-            }
+    <!-- 予約フォーム表示 -->
+    <div v-else class="space-y-6">
+        <header class="mb-8">
+            <h1 class="text-3xl font-black text-slate-900 leading-tight">Reservation</h1>
+            <p class="text-[10px] text-slate-400 font-mono mt-2 uppercase tracking-widest">User ID: {{ userId }}</p>
+        </header>
+
+        <form @submit.prevent="submit" class="space-y-6">
+            <div v-for="(item, index) in formConfig" :key="index" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                <label class="block text-sm font-bold text-slate-700 mb-3">
+                    {{ item.label }}
+                    <span v-if="item.required" class="text-red-500 ml-1 text-xs">*</span>
+                </label>
+                
+                <!-- テキスト入力 / 日付 / メール / 電話 -->
+                <input v-if="['text', 'date', 'datetime-local', 'email', 'tel'].includes(item.type)" 
+                       :type="item.type" 
+                       v-model="answers[item.label]" 
+                       :required="item.required"
+                       class="w-full bg-slate-50 border-none rounded-xl p-3 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none transition">
+                
+                <!-- セレクトボックス -->
+                <select v-else-if="item.type === 'select'" 
+                        v-model="answers[item.label]" 
+                        :required="item.required"
+                        class="w-full bg-slate-50 border-none rounded-xl p-3 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none transition appearance-none">
+                    <option value="" disabled>選択してください</option>
+                    <option v-for="opt in item.options" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+            </div>
+
+            <button type="submit" 
+                    :disabled="submitting"
+                    class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all text-lg disabled:bg-slate-300">
+                {{ submitting ? '送信中...' : '予約を確定する' }}
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+/**
+ * 設定：ここに GAS のデプロイ URL (末尾 /exec) を貼り付けてください
+ */
+const GAS_URL = "https://script.google.com/macros/s/XXXXXXXXX/exec"; 
+
+new Vue({
+    el: '#app',
+    data: {
+        loading: true,
+        submitting: false,
+        status: 'システムを起動中...',
+        error: null,
+        formConfig: [],
+        answers: {},
+        userId: ''
+    },
+    async mounted() {
+        try {
+            // 1. GAS から設定情報 (LIFF ID, フォーム構成) を一括取得
+            this.status = '設定を読み込み中...';
+            const res = await fetch(GAS_URL, {
+                method: 'POST',
+                mode: 'cors',
+                redirect: 'follow',
+                body: JSON.stringify({ method: 'getInitialData' })
+            }).catch(() => {
+                throw new Error("サーバーへの接続に失敗しました。GASのデプロイURLが正しいか確認してください。");
+            });
+
+            const result = await res.json();
+            if (!result.success) throw new Error(result.message);
             
-            // 簡単な形式チェック
-            if (!url.startsWith('https://script.google.com/')) {
-                alert("GAS のデプロイ URL が正しくありません。");
+            const data = result.data;
+            this.formConfig = data.formConfig;
+
+            // 2. LIFF 初期化
+            this.status = 'LINE認証中...';
+            if (!data.liffId) throw new Error("LIFF IDがスプレッドシートに設定されていません。");
+            
+            await liff.init({ liffId: data.liffId });
+            
+            if (!liff.isLoggedIn()) {
+                liff.login();
                 return;
             }
-
-            // UI 状態の更新
-            btn.disabled = true;
-            btn.innerText = "通信中...";
-            resDiv.classList.add('hidden');
-
+            
+            const profile = await liff.getProfile();
+            this.userId = profile.userId;
+            
+            this.loading = false;
+        } catch (e) {
+            console.error(e);
+            this.error = e.message;
+            this.loading = false;
+        }
+    },
+    methods: {
+        async submit() {
+            this.submitting = true;
             try {
-                // fetch を使用して GAS へ POST リクエストを送信
-                const response = await fetch(url, {
+                const res = await fetch(GAS_URL, {
                     method: 'POST',
-                    mode: 'cors', // CORS を有効化
+                    mode: 'cors',
+                    redirect: 'follow',
                     body: JSON.stringify({ 
-                        message: "Hello GAS!", 
-                        origin: "GitHub Pages Test" 
-                    }),
-                    redirect: 'follow' // GAS のリダイレクトに追従するために必須
+                        method: 'submitForm', 
+                        data: { 
+                            userId: this.userId, 
+                            answers: this.answers 
+                        } 
+                    })
                 });
-
-                // 通信自体の成否を確認
-                if (!response.ok) {
-                    throw new Error(`HTTP エラー: ${response.status}`);
-                }
-
-                // GAS からの JSON レスポンスを解析
-                const data = await response.json();
+                const result = await res.json();
                 
-                // 成功表示
-                resDiv.className = "mt-6 p-4 rounded-xl bg-green-50 text-green-700 border border-green-100";
-                resDiv.innerHTML = `
-                    <div class="font-bold mb-1 font-sans">✅ 通信成功！</div>
-                    <div class="text-xs opacity-80 mb-2">時刻: ${data.timestamp}</div>
-                    <div class="bg-white/50 p-2 rounded border border-green-200 font-mono text-[10px]">
-                        Response: ${JSON.stringify(data, null, 2)}
-                    </div>
-                `;
-                console.log("Success:", data);
-
-            } catch (err) {
-                // エラー表示
-                console.error("Fetch Error:", err);
-                resDiv.className = "mt-6 p-4 rounded-xl bg-red-50 text-red-700 border border-red-100 font-sans";
-                resDiv.innerHTML = `
-                    <div class="font-bold mb-1">❌ 失敗しました</div>
-                    <div class="text-xs">${err.message}</div>
-                    <div class="mt-2 pt-2 border-t border-red-200 text-[10px]">
-                        <strong>確認事項:</strong><br>
-                        1. GAS のデプロイ設定が「全員 (Anyone)」か？<br>
-                        2. 最新のコードで「新しいデプロイ」を行ったか？<br>
-                        3. ブラウザのキャッシュが残っていないか？
-                    </div>
-                `;
-            } finally {
-                // ボタンを元に戻す
-                btn.disabled = false;
-                btn.innerText = "GAS へテスト送信";
-                resDiv.classList.remove('hidden');
+                if (result.success) {
+                    alert('予約が完了しました！');
+                    liff.closeWindow();
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (e) {
+                alert('送信エラー: ' + e.message);
+                this.submitting = false;
             }
         }
-    </script>
+    }
+});
+</script>
 </body>
 </html>
