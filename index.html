@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>予約フォーム</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body class="bg-slate-50 p-4">
+<div id="app" class="max-w-md mx-auto py-8">
+    <!-- ローディング表示 -->
+    <div v-if="loading" class="text-center py-20">
+        <div class="animate-spin inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mb-2"></div>
+        <p class="text-gray-500">{{ status }}</p>
+    </div>
+
+    <!-- フォーム本体 -->
+    <div v-else class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+        <h1 class="text-xl font-bold mb-6">予約フォーム</h1>
+        <form @submit.prevent="submit">
+            <!-- 質問項目をループで回して生成 -->
+            <div v-for="(item, index) in formConfig" :key="index" class="mb-4">
+                <label class="block text-sm font-bold mb-2">{{ item.label }}</label>
+                
+                <!-- テキスト入力 -->
+                <input v-if="item.type === 'text'" 
+                       type="text" 
+                       v-model="answers[item.label]" 
+                       :required="item.required"
+                       class="w-full bg-slate-50 border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                
+                <!-- セレクトボックス -->
+                <select v-else-if="item.type === 'select'" 
+                        v-model="answers[item.label]" 
+                        :required="item.required"
+                        class="w-full bg-slate-50 border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    <option v-for="opt in item.options" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+
+                <!-- 日付/時刻入力 -->
+                <input v-else-if="['date', 'datetime-local'].includes(item.type)" 
+                       :type="item.type" 
+                       v-model="answers[item.label]" 
+                       :required="item.required"
+                       class="w-full bg-slate-50 border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+            </div>
+
+            <button type="submit" 
+                    :disabled="submitting"
+                    class="w-full bg-blue-600 text-white py-4 rounded-xl font-bold hover:bg-blue-700 transition mt-4 disabled:bg-gray-400">
+                {{ submitting ? '送信中...' : '送信する' }}
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+// --- 重要：ここに自分のGASのデプロイURLを貼り付けてください ---
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyjTh5jv2YzksOfdn3x3qy3Z384gvz87nlA8KKA47C2c5W54UutE_TGogNMPe7AO1YD/exec"; 
+
+new Vue({
+    el: '#app',
+    data: {
+        loading: true,
+        submitting: false,
+        status: '読み込み中...',
+        formConfig: [],
+        answers: {},
+        userId: ''
+    },
+    async mounted() {
+        try {
+            // 1. GASから設定を取得 (API通信)
+            const res = await fetch(GAS_URL, {
+                method: 'POST',
+                body: JSON.stringify({ method: 'getInitialData' })
+            });
+            const result = await res.json();
+            if (!result.success) throw new Error(result.message);
+            
+            this.formConfig = result.data.formConfig;
+
+            // 2. LIFF初期化
+            const liffId = result.data.liffId;
+            await liff.init({ liffId: liffId });
+            
+            if (!liff.isLoggedIn()) {
+                liff.login();
+                return;
+            }
+            
+            const profile = await liff.getProfile();
+            this.userId = profile.userId;
+            this.loading = false;
+        } catch (e) {
+            console.error(e);
+            alert("初期化エラー: " + e.message);
+        }
+    },
+    methods: {
+        async submit() {
+            this.submitting = true;
+            try {
+                // GASへデータを送信 (API通信)
+                const res = await fetch(GAS_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ 
+                        method: 'submitForm', 
+                        data: { 
+                            userId: this.userId, 
+                            answers: this.answers 
+                        } 
+                    })
+                });
+                const result = await res.json();
+                
+                if (result.success) {
+                    alert('送信が完了しました！');
+                    liff.closeWindow();
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (e) {
+                alert('送信エラー: ' + e.message);
+                this.submitting = false;
+            }
+        }
+    }
+});
+</script>
+</body>
+</html>
